@@ -358,7 +358,7 @@ BUTTON_TYPES = [
     SolaxModbusButtonEntityDescription(
         name="Grid Export",
         key="grid_export",
-        register=0x51,  # ModbusPowerControl register
+        register=0x51,
         icon="mdi:home-export-outline",
         command=1,
         allowedtypes=AC | HYBRID | GEN3,
@@ -402,7 +402,7 @@ MAX_CURRENTS = [
     ("H460", 30),  # Gen4 X1 6kW
     ("H475", 30),  # Gen4 X1 7.5kW
     ("PRE", 30),  # Gen4 X1 RetroFit
-    ("PRI", 30),  # Gen4 X1 RetroFit  -- this also applies to Gen3 RetroFit
+    ("PRI", 30),  # Gen4 X1 RetroFit
     ("H55", 50),  # Gen5 X1-IES
     ("H56", 50),  # Gen5 X1-IES
     ("H58", 50),  # Gen5 X1-IES
@@ -442,7 +442,6 @@ MAX_EXPORT = [
     ("HUE37", 5000),  # Gen3 X1
     ("HUE46", 6000),  # Gen3 X1
     ("HUE5", 6000),  # Gen3 X1
-    ("PRI502H", 6000), # added for X1 G3 RetroFit 5kW
     ("XRE30", 5000),  # Gen3 X1
     ("XRE37", 5000),  # Gen3 X1
     ("XRE46", 6000),  # Gen3 X1
@@ -751,7 +750,7 @@ NUMBER_TYPES = [
         native_step=1,
         native_unit_of_measurement=PERCENTAGE,
         state="battery_minimum_capacity_gridtied",
-        allowedtypes=AC | HYBRID | GEN3,  # added AC for X1 G3 RetroFit
+        allowedtypes=HYBRID | GEN3,
         icon="mdi:battery-sync",
     ),
     SolaxModbusNumberEntityDescription(
@@ -832,7 +831,7 @@ NUMBER_TYPES = [
         register=0x42,
         fmt="i",
         native_min_value=0,
-        native_max_value=60000, # X1 G3 RetroFit - updated from 2500
+        native_max_value=2500,
         scale=1,
         native_step=100,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -932,7 +931,7 @@ NUMBER_TYPES = [
     SolaxModbusNumberEntityDescription(
         name="Grid Export Limit",
         key="grid_export_limit",
-        register=0x52, # X1 G3 RetroFit ActivePower register
+        register=0x52,
         fmt="i",
         native_min_value=-6000,
         native_max_value=6000,
@@ -3175,7 +3174,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
     SolaXModbusSensorEntityDescription(
         key="forcetime_period_1_max_capacity",
         register=0x10C,
-        allowedtypes=GEN3,   # removed AC as not ok for RetroFit
+        allowedtypes=AC | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
@@ -3186,12 +3185,12 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
             0: "Disabled",
             1: "Enabled",
         },
-        allowedtypes=AC | HYBRID | GEN3 | EPS,   # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3 | EPS,
     ),
     SolaXModbusSensorEntityDescription(
         key="forcetime_period_2_max_capacity",
         register=0x10D,
-        allowedtypes=GEN3,   # removed AC as not ok for RetroFit
+        allowedtypes=AC | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
@@ -3203,7 +3202,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
             1: "CT",
         },
         entity_registry_enabled_default=False,
-        allowedtypes=GEN3,       # removed AC as not ok for RetroFit
+        allowedtypes=AC | GEN3,
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:meter-electric",
     ),
@@ -3226,13 +3225,13 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
     SolaXModbusSensorEntityDescription(
         key="forcetime_period_1_max_capacity",
         register=0x10F,
-        allowedtypes=AC | HYBRID | GEN3,     # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
         key="forcetime_period_2_max_capacity",
         register=0x110,
-        allowedtypes=AC | HYBRID | GEN3,      # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
@@ -3248,7 +3247,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
     SolaXModbusSensorEntityDescription(
         key="battery_minimum_capacity_gridtied",
         register=0x112,
-        allowedtypes=AC | HYBRID | GEN3,     # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
@@ -3293,7 +3292,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
             1: "CT",
         },
         entity_registry_enabled_default=False,
-        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,    # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3 | GEN4 | GEN5,
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:meter-electric",
     ),
@@ -4490,7 +4489,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
         register_type=REG_INPUT,
         scale=0.1,
         rounding=2,  # GEN4 | GEN5 might be 1
-        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,    # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3 | GEN4 | GEN5,
     ),
     SolaXModbusSensorEntityDescription(
         name="Total Solar Energy",
@@ -4519,7 +4518,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
         rounding=2,
         register_type=REG_INPUT,
         unit=REGISTER_U32,
-        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,    # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3 | GEN4 | GEN5,
     ),
     SolaXModbusSensorEntityDescription(
         key="lock_state",
@@ -5411,14 +5410,14 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
         key="eps_min_esc_voltage",
         register=0x10D,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        allowedtypes=AC | HYBRID | GEN3 | EPS,     # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3 | EPS,
     ),
     SolaXModbusSensorEntityDescription(
         name="EPS Min Esc SOC",
         key="eps_min_esc_soc",
         register=0x10E,
         native_unit_of_measurement=PERCENTAGE,
-        allowedtypes=AC | HYBRID | GEN3 | EPS,     # added AC for RetroFit
+        allowedtypes=HYBRID | GEN3 | EPS,
     ),
     SolaXModbusSensorEntityDescription(
         name="Reactive Power Upper",
@@ -7741,7 +7740,7 @@ class solax_plugin(plugin_base):
             _LOGGER.error(f"{hub.name}: cannot find any serial number(s)")
             seriesnumber = "unknown"
 
-        # derive invertertype from seriesnumber
+        # derive invertertupe from seriiesnumber
         if seriesnumber.startswith("L30"):
             invertertype = HYBRID | GEN2 | X1  # Gen2 X1 SK-TL 3kW
             self.inverter_model = f"X1-Hybrid-{seriesnumber[1:2]}.{seriesnumber[2:3]}kW SK-TL"
@@ -7779,7 +7778,7 @@ class solax_plugin(plugin_base):
             invertertype = AC | GEN3 | X1  # X1AC
             self.inverter_model = "X1-AC"
         elif seriesnumber.startswith("PRI"):
-            invertertype = AC | GEN3 | X1  # RetroFit - this really needs its own invertertype as it is more like a hybrid for many registers
+            invertertype = AC | GEN3 | X1  # RetroFit
             self.inverter_model = "X1-RetroFit"
         elif seriesnumber.startswith("H3DE"):
             invertertype = HYBRID | GEN3 | X3  # Gen3 X3
