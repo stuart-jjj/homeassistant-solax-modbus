@@ -750,7 +750,7 @@ NUMBER_TYPES = [
         native_step=1,
         native_unit_of_measurement=PERCENTAGE,
         state="battery_minimum_capacity_gridtied",
-        allowedtypes=HYBRID | GEN3,
+        allowedtypes=AC | HYBRID | GEN3,
         icon="mdi:battery-sync",
     ),
     SolaxModbusNumberEntityDescription(
@@ -3171,12 +3171,12 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
         allowedtypes=AC | HYBRID | GEN3,
         internal=True,
     ),
-    SolaXModbusSensorEntityDescription(
-        key="forcetime_period_1_max_capacity",
-        register=0x10C,
-        allowedtypes=AC | GEN3,
-        internal=True,
-    ),
+#    SolaXModbusSensorEntityDescription(
+#        key="forcetime_period_1_max_capacity",
+#        register=0x10C,
+#        allowedtypes=AC | GEN3,
+#        internal=True,
+#    ),
     SolaXModbusSensorEntityDescription(
         name="EPS Auto Restart",
         key="eps_auto_restart",
@@ -3185,27 +3185,27 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
             0: "Disabled",
             1: "Enabled",
         },
-        allowedtypes=HYBRID | GEN3 | EPS,
+        allowedtypes=AC | HYBRID | GEN3 | EPS,
     ),
-    SolaXModbusSensorEntityDescription(
-        key="forcetime_period_2_max_capacity",
-        register=0x10D,
-        allowedtypes=AC | GEN3,
-        internal=True,
-    ),
-    SolaXModbusSensorEntityDescription(
-        name="CT Meter Setting",
-        key="ct_meter_setting",
-        register=0x10E,
-        scale={
-            0: "Meter",
-            1: "CT",
-        },
-        entity_registry_enabled_default=False,
-        allowedtypes=AC | GEN3,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        icon="mdi:meter-electric",
-    ),
+#    SolaXModbusSensorEntityDescription(
+#        key="forcetime_period_2_max_capacity",
+#        register=0x10D,
+#        allowedtypes=AC | GEN3,
+#        internal=True,
+#    ),
+#    SolaXModbusSensorEntityDescription(
+#        name="CT Meter Setting",
+#        key="ct_meter_setting",
+#        register=0x10E,
+#        scale={
+#            0: "Meter",
+#            1: "CT",
+#        },
+#        entity_registry_enabled_default=False,
+#        allowedtypes=AC | GEN3,
+#        entity_category=EntityCategory.DIAGNOSTIC,
+#        icon="mdi:meter-electric",
+#    ),
     SolaXModbusSensorEntityDescription(
         key="battery_charge_upper_soc",
         register=0x10E,
@@ -3225,13 +3225,13 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
     SolaXModbusSensorEntityDescription(
         key="forcetime_period_1_max_capacity",
         register=0x10F,
-        allowedtypes=HYBRID | GEN3,
+        allowedtypes=AC | HYBRID | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
         key="forcetime_period_2_max_capacity",
         register=0x110,
-        allowedtypes=HYBRID | GEN3,
+        allowedtypes=AC | HYBRID | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
@@ -3247,7 +3247,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
     SolaXModbusSensorEntityDescription(
         key="battery_minimum_capacity_gridtied",
         register=0x112,
-        allowedtypes=HYBRID | GEN3,
+        allowedtypes=AC | HYBRID | GEN3,
         internal=True,
     ),
     SolaXModbusSensorEntityDescription(
@@ -3292,7 +3292,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
             1: "CT",
         },
         entity_registry_enabled_default=False,
-        allowedtypes=HYBRID | GEN3 | GEN4 | GEN5,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:meter-electric",
     ),
@@ -4489,7 +4489,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
         register_type=REG_INPUT,
         scale=0.1,
         rounding=2,  # GEN4 | GEN5 might be 1
-        allowedtypes=HYBRID | GEN3 | GEN4 | GEN5,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,
     ),
     SolaXModbusSensorEntityDescription(
         name="Total Solar Energy",
@@ -4518,7 +4518,7 @@ SENSOR_TYPES_MAIN: list[SolaXModbusSensorEntityDescription] = [
         rounding=2,
         register_type=REG_INPUT,
         unit=REGISTER_U32,
-        allowedtypes=HYBRID | GEN3 | GEN4 | GEN5,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,
     ),
     SolaXModbusSensorEntityDescription(
         key="lock_state",
@@ -7740,7 +7740,7 @@ class solax_plugin(plugin_base):
             _LOGGER.error(f"{hub.name}: cannot find any serial number(s)")
             seriesnumber = "unknown"
 
-        # derive invertertupe from seriiesnumber
+        # derive invertertype from seriesnumber
         if seriesnumber.startswith("L30"):
             invertertype = HYBRID | GEN2 | X1  # Gen2 X1 SK-TL 3kW
             self.inverter_model = f"X1-Hybrid-{seriesnumber[1:2]}.{seriesnumber[2:3]}kW SK-TL"
