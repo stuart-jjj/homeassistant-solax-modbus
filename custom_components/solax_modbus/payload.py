@@ -21,10 +21,13 @@ from struct import pack, unpack
 from pymodbus.constants import Endian
 from pymodbus.exceptions import ParameterException
 from pymodbus.logging import Log
-from pymodbus.utilities import (
-    pack_bitstring,
-    unpack_bitstring,
-)
+
+import pymodbus
+from packaging.version import parse
+if parse(pymodbus.__version__) >= parse("3.9.2"):
+  from pymodbus.pdu.pdu import pack_bitstring, unpack_bitstring
+else:
+  from pymodbus.utilities import pack_bitstring, unpack_bitstring
 
 
 class BinaryPayloadBuilder:
@@ -453,3 +456,4 @@ class BinaryPayloadDecoder:
         :param nbytes: The number of bytes to skip
         """
         self._pointer += nbytes
+        

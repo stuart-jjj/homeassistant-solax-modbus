@@ -51,6 +51,7 @@ DOMAIN = "solax_modbus"
 INVERTER_IDENT = "inverter"
 DEFAULT_NAME = "SolaX"
 DEFAULT_INVERTER_NAME_SUFFIX = "Inverter"
+DEFAULT_INVERTER_POWER_KW = 100
 DEFAULT_SCAN_INTERVAL = 15
 DEFAULT_PORT = 502
 DEFAULT_MODBUS_ADDR = 1
@@ -58,6 +59,7 @@ DEFAULT_TCP_TYPE = "tcp"
 CONF_TCP_TYPE = "tcp_type"
 TMPDATA_EXPIRY = 120  # seconds before temp entities return to modbus value
 CONF_INVERTER_NAME_SUFFIX = "inverter_name_suffix"
+CONF_INVERTER_POWER_KW = "inverter_power_kw"
 CONF_READ_EPS = "read_eps"
 CONF_READ_DCB = "read_dcb"
 CONF_READ_PM = "read_pm"
@@ -90,8 +92,14 @@ CONF_SCAN_INTERVAL_FAST = "scan_interval_fast"
 SCAN_GROUP_DEFAULT = CONF_SCAN_INTERVAL  # default scan group, slow; should always work
 SCAN_GROUP_MEDIUM = CONF_SCAN_INTERVAL_MEDIUM  # medium speed scanning (energy, temp, soc...)
 SCAN_GROUP_FAST = CONF_SCAN_INTERVAL_FAST  # fast scanning (power,...)
+SCAN_GROUP_AUTO = "auto"  # _MEDIUM for temperatures, frequency and energy (kWh), otherwise _DEFAULT
 CONF_TIME_OUT = "time_out"
 DEFAULT_TIME_OUT = 5
+
+# ================================= Button autorepeat initval codes for button value_functions ==========================
+BUTTONREPEAT_FIRST = 0  # first manual trigger click
+BUTTONREPEAT_LOOP  = 1  # automated loop
+BUTTONREPEAT_POST = -1 # final call after autoduration expired - no action needed in most cases
 
 # ================================= Definitions for Sensor Declarations =================================================
 
@@ -111,7 +119,6 @@ WRITE_SINGLE_MODBUS = 1  # use write_single_modbus command
 WRITE_MULTISINGLE_MODBUS = 2  # use write_mutiple modbus command for single register
 WRITE_DATA_LOCAL = 3  # write only to local data storage (not persistent)
 WRITE_MULTI_MODBUS = 4  # use write_multiple modbus command
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,6 +152,10 @@ class plugin_base:
     order16: int | None = None  # Endian.BIG or Endian.LITTLE
     order32: int | None = None
     inverter_model: str = None
+    default_holding_scangroup: str = SCAN_GROUP_DEFAULT  
+    default_input_scangroup: str = SCAN_GROUP_DEFAULT   # or SCAN_GROUP_AUTO
+    auto_default_scangroup: str = SCAN_GROUP_FAST, # only used when default_xxx_scangroup is set to SCAN_GROUP_AUTO
+    auto_slow_scangroup: str = SCAN_GROUP_MEDIUM, # only usedwhen default_xxx_scangroup is set to SCAN_GROUP_AUTO
 
     def isAwake(self, datadict):
         return True  # always awake by default
@@ -188,7 +199,7 @@ class BaseModbusSensorEntityDescription(SensorEntityDescription):
     blacklist: list = None
     register: int = -1  # initialize with invalid register
     rounding: int = 1
-    register_type: int = None  # REGISTER_HOLDING or REGISTER_INPUT or REG_DATA
+    register_type: int = None  # REG_HOLDING or REG_INPUT or REG_DATA
     unit: int = None  # e.g. REGISTER_U16
     scan_group: int = None  # <=0 -> default group
     internal: bool = False  # internal sensors are used for reading data only; used for computed, selects, etc
@@ -196,8 +207,11 @@ class BaseModbusSensorEntityDescription(SensorEntityDescription):
     # prevent_update: bool = False # if set to True, value will not be re-read/updated with each polling cycle; only when read value changes
     value_function: callable = None  #  value = function(initval, descr, datadict)
     wordcount: int = None  # only for unit = REGISTER_STR and REGISTER_WORDS
-    sleepmode: int = SLEEPMODE_LAST  # or SLEEPMODE_ZERO or SLEEPMODE_NONE
-    ignore_readerror: bool = False  # if not False, ignore read errors for this block and return this static value
+    sleepmode: int = SLEEPMODE_LAST  # or SLEEPMODE_ZERO, SLEEPMODE_NONE or SLEEPMODE_LASTAWAKE
+    ignore_readerror: bool = False  # not strictly boolean: boolean or static other value 
+    # if False, read errors will invalidate the data
+    # if True, data will remain untouched
+    # if not False nor True (e.g. a number): ignore read errors for this block and return this static value
     # A failing block read will be accepted as valid block if the first entity of the block contains a non-False ignore_readerror attribute.
     # The other entitties of the block can also have an ignore_readerror attribute that determines the value returned upon failure
     # so typically this attribute can be set to None or "Unknown" or any other value
@@ -205,7 +219,8 @@ class BaseModbusSensorEntityDescription(SensorEntityDescription):
     # When simply set to True, no initial value will be returned, but the block will be considered valid
     value_series: int = None  # if not None, the value is part of a series of values with similar properties
     # The name and key must contain a placeholder {} that is replaced by the preceding number
-
+    min_value: int = None
+    max_value: int = None
 
 @dataclass
 class BaseModbusButtonEntityDescription(ButtonEntityDescription):
@@ -257,9 +272,8 @@ class BaseModbusNumberEntityDescription(NumberEntityDescription):
     write_method: int = WRITE_SINGLE_MODBUS  # WRITE_SINGLE_MOBUS or WRITE_MULTI_MODBUS or WRITE_DATA_LOCAL
     initvalue: int = None  # initial default value for WRITE_DATA_LOCAL entities
     unit: int = None  #  optional for WRITE_DATA_LOCAL e.g REGISTER_U16, REGISTER_S32 ...
-    prevent_update: bool = (
-        False  # if set to True, value will not be re-read/updated with each polling cycle; only when read value changes
-    )
+    prevent_update: bool = False  # if set to True, value will not be re-read/updated with each polling cycle;
+                                  # update only when read value changes
 
 
 # ========================= autorepeat aux functions to be used on hub.data dictionary ===============================
@@ -272,6 +286,8 @@ def autorepeat_set(datadict, entitykey, value):
 def autorepeat_stop(datadict, entitykey):
     datadict["_repeatUntil"][entitykey] = 0
 
+def autorepeat_stop_with_postaction(datadict, entitykey):
+    datadict["_repeatUntil"][entitykey] = 1
 
 def autorepeat_remaining(datadict, entitykey, timestamp):
     remaining = datadict["_repeatUntil"].get(entitykey, 0) - timestamp
@@ -281,9 +297,18 @@ def autorepeat_remaining(datadict, entitykey, timestamp):
 # ================================= Computed sensor value functions  =================================================
 
 
-def value_function_pv_power_total(initval, descr, datadict):
-    return datadict.get("pv_power_1", 0) + datadict.get("pv_power_2", 0) + datadict.get("pv_power_3", 0)
-
+MAX_PVSTRINGS = 10
+def value_function_pv_power_total(initval, descr, datadict): 
+    # changed: for performance reasons, we should not iterate over the entire datadict every polling cyle (contains hundreds ...)
+    total = 0
+    i = 1
+    while i <= MAX_PVSTRINGS:
+        v = datadict.get(f"pv_power_{i}", None)
+        if v is None:
+            break
+        else: total += v 
+        i += 1
+    return total
 
 def value_function_battery_output(initval, descr, datadict):
     val = datadict.get("battery_power_charge", 0)
@@ -318,6 +343,12 @@ def value_function_battery_input_solis(initval, descr, datadict):
     else:
         return 0
 
+def value_function_disabled_enabled(initval, descr, datadict):
+    scale = {
+        0: "Disabled",
+        1: "Enabled",
+    }
+    return scale.get(initval, str(initval) + " Unknown Status")
 
 def value_function_grid_import(initval, descr, datadict):
     val = datadict.get("measured_power", 0)
