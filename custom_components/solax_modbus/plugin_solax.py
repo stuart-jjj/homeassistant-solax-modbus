@@ -598,9 +598,9 @@ def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, d
         return {"action": WRITE_MULTI_MODBUS, "data": []}
 
     res: list[tuple[Any, Any]] = [
-        (REGISTER_U16, 1),         # 0x7C: control enable
+        (REGISTER_U16, 1),  # 0x7C: control enable
         (REGISTER_S32, ap_target),  # 0x7D–0x7E: active power, LSW-first via order32=little
-        (REGISTER_S32, 0),          # 0x7F–0x80: reactive power (always 0 for Gen3)
+        (REGISTER_S32, 0),  # 0x7F–0x80: reactive power (always 0 for Gen3)
     ]
 
     if power_control == "Disabled":
