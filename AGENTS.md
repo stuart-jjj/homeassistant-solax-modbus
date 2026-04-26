@@ -22,11 +22,11 @@ This file helps AI coding agents work safely and efficiently in this repository.
 - SolaX plugin entities and callbacks: [custom_components/solax_modbus/plugin_solax.py](custom_components/solax_modbus/plugin_solax.py)
 
 ## Export Control Logic (Focus: export_duration)
-- `export_duration` is a select entity in [custom_components/solax_modbus/plugin_solax.py](custom_components/solax_modbus/plugin_solax.py#L2907):
+- `export_duration` is a select entity in [custom_components/solax_modbus/plugin_solax.py](custom_components/solax_modbus/plugin_solax.py):
   - key: `export_duration`
   - write register: `0x9F`
   - options map: seconds -> labels (`4`, `900`, `1800`, `2700`, `3600`, `5400`, `7200`)
-- Feedback is read via a sensor with the same key in [custom_components/solax_modbus/plugin_solax.py](custom_components/solax_modbus/plugin_solax.py#L4627):
+- Feedback is read via a sensor with the same key in [custom_components/solax_modbus/plugin_solax.py](custom_components/solax_modbus/plugin_solax.py):
   - read register: `0x10B`
   - `scale` dict mirrors the select option dict.
 - Write path:
