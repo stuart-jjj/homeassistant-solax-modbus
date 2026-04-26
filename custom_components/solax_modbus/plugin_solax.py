@@ -245,27 +245,20 @@ class SolaXModbusSwitchEntityDescription(BaseModbusSwitchEntityDescription):
 # ====================================== Computed value functions  =================================================
 
 
-def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadict: dict[str, Any]) -> dict[str, Any]:
-    """Remote control power calculations for SolaX inverters - Redesigned Implementation.
+def _compute_remotecontrol_ap_target(datadict: dict[str, Any]) -> dict[str, Any]:
+    """Shared computation of the clamped active-power target for remotecontrol modes 1-7.
 
-    This function implements the redesigned remote control calculations based on clear
-    variable names and logical formulas. For detailed documentation, see:
-    docs/solax-remote-control-redesigned.md
+    Reads control parameters, power measurements and phase data from *datadict*,
+    applies mode-specific logic, phase-envelope protection and import/export bounds,
+    and returns a dict with the final clamped values:
 
-    Args:
-        initval: BUTTONREPEAT_FIRST (first run), BUTTONREPEAT_LOOP (subsequent runs),
-                or BUTTONREPEAT_POST (cleanup)
-        descr: Entity description
-        datadict: Current sensor data dictionary
-
-    Returns:
-        Dictionary with action and data for Modbus write operations
+        power_control  – final mode string (may be normalised to "Enabled Power Control")
+        set_type       – "Set" or "Update"
+        ap_target      – clamped active power target in Watts (int)
+        reactive_power – clamped reactive power in VAr (int)
+        rc_duration    – command duration in seconds
+        rc_timeout     – autorepeat timeout in seconds
     """
-
-    # terminate expiring loop by disabling remotecontrol
-    if initval == BUTTONREPEAT_POST:
-        return {"action": WRITE_MULTI_MODBUS, "data": [("remotecontrol_power_control", "Disabled")]}
-
     # Get control parameters
     power_control = datadict.get("remotecontrol_power_control", "Disabled")
     set_type = datadict.get("remotecontrol_set_type", "Set")
@@ -300,7 +293,14 @@ def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadi
     elif parallel_setting == "Slave":
         # Slaves should not execute remote control
         _LOGGER.debug("[REMOTE_CONTROL] Parallel mode detected (Slave): skipping remote control")
-        return {"action": WRITE_MULTI_MODBUS, "data": []}
+        return {
+            "power_control": "Disabled",
+            "set_type": set_type,
+            "ap_target": 0,
+            "reactive_power": 0,
+            "rc_duration": rc_duration,
+            "rc_timeout": rc_timeout,
+        }
     else:
         # Single inverter mode - use individual values
         pv_power = datadict.get("pv_power_total", 0)
@@ -365,6 +365,9 @@ def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadi
             power_control = "Disabled"
 
     elif power_control == "Disabled":
+        ap_target = target
+
+    else:
         ap_target = target
 
     # Debug logging: Target calculation
@@ -504,23 +507,106 @@ def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadi
             f"adjusted_by={old_ap_target - ap_target}W"
         )
 
-    # Prepare result data
+    return {
+        "power_control": power_control,
+        "set_type": set_type,
+        "ap_target": int(ap_target),
+        "reactive_power": int(max(min(reap_up, reactive_power), reap_lo)),
+        "rc_duration": rc_duration,
+        "rc_timeout": rc_timeout,
+    }
+
+
+def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadict: dict[str, Any]) -> dict[str, Any]:
+    """Remote control power calculations for SolaX inverters - Redesigned Implementation.
+
+    This function implements the redesigned remote control calculations based on clear
+    variable names and logical formulas. For detailed documentation, see:
+    docs/solax-remote-control-redesigned.md
+
+    Args:
+        initval: BUTTONREPEAT_FIRST (first run), BUTTONREPEAT_LOOP (subsequent runs),
+                or BUTTONREPEAT_POST (cleanup)
+        descr: Entity description
+        datadict: Current sensor data dictionary
+
+    Returns:
+        Dictionary with action and data for Modbus write operations
+    """
+
+    # terminate expiring loop by disabling remotecontrol
+    if initval == BUTTONREPEAT_POST:
+        return {"action": WRITE_MULTI_MODBUS, "data": [("remotecontrol_power_control", "Disabled")]}
+
+    params = _compute_remotecontrol_ap_target(datadict)
+    power_control = params["power_control"]
+
+    # For Slave parallel mode, _compute returns Disabled with empty ap_target — bail out silently
+    if power_control == "Disabled" and datadict.get("parallel_setting") == "Slave":
+        return {"action": WRITE_MULTI_MODBUS, "data": []}
+
     res = [
         ("remotecontrol_power_control", power_control),
-        ("remotecontrol_set_type", set_type),
-        ("remotecontrol_active_power", ap_target),
-        ("remotecontrol_reactive_power", max(min(reap_up, reactive_power), reap_lo)),
-        ("remotecontrol_duration", rc_duration),
+        ("remotecontrol_set_type", params["set_type"]),
+        ("remotecontrol_active_power", params["ap_target"]),
+        ("remotecontrol_reactive_power", params["reactive_power"]),
+        ("remotecontrol_duration", datadict.get("remotecontrol_duration", 20)),
         (REGISTER_U16, 0),  # dummy target soc
         (REGISTER_U32, 0),  # dummy target energy Wh
         (REGISTER_S32, 0),  # dummy target charge/discharge power
-        ("remotecontrol_timeout", rc_timeout),
+        ("remotecontrol_timeout", params["rc_timeout"]),
     ]
 
     if power_control == "Disabled":
         autorepeat_stop(datadict, "remotecontrol_trigger")
 
     _LOGGER.debug(f"Evaluated remotecontrol_trigger: corrected/clamped values: {res}")
+    return {"action": WRITE_MULTI_MODBUS, "data": res}
+
+
+def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, datadict: dict[str, Any]) -> dict[str, Any]:
+    """Active power control for SolaX X1 AC G3 inverters.
+
+    Sends a 5-register FC16 burst starting at 0x7C:
+      0x7C        U16  – control enable (1 = active, 0 = disabled)
+      0x7D–0x7E   S32  – active power in Watts, LSW-first (order32=little)
+                         negative = export/discharge, positive = import/charge
+      0x7F–0x80   S32  – reactive power (always 0)
+
+    The inverter reverts to self-consumption if no refresh arrives within 4 s
+    (configured via register 0x9F = 4 at startup).  Set
+    *remotecontrol_autorepeat_duration* to the desired window (seconds) and
+    the integration will keep sending commands every poll cycle.
+    """
+    if initval == BUTTONREPEAT_POST:
+        # Zero all five registers to relinquish control
+        return {
+            "action": WRITE_MULTI_MODBUS,
+            "data": [
+                (REGISTER_U16, 0),  # 0x7C: disable control
+                (REGISTER_S32, 0),  # 0x7D–0x7E: active power = 0
+                (REGISTER_S32, 0),  # 0x7F–0x80: reactive power = 0
+            ],
+        }
+
+    params = _compute_remotecontrol_ap_target(datadict)
+    power_control = params["power_control"]
+    ap_target = params["ap_target"]
+
+    # For Slave parallel mode, bail out silently
+    if power_control == "Disabled" and datadict.get("parallel_setting") == "Slave":
+        return {"action": WRITE_MULTI_MODBUS, "data": []}
+
+    res: list[tuple[Any, Any]] = [
+        (REGISTER_U16, 1),         # 0x7C: control enable
+        (REGISTER_S32, ap_target),  # 0x7D–0x7E: active power, LSW-first via order32=little
+        (REGISTER_S32, 0),          # 0x7F–0x80: reactive power (always 0 for Gen3)
+    ]
+
+    if power_control == "Disabled":
+        autorepeat_stop(datadict, "remotecontrol_trigger_gen3")
+
+    _LOGGER.debug(f"Evaluated remotecontrol_trigger_gen3: power_control={power_control} ap_target={ap_target}W payload: {res}")
     return {"action": WRITE_MULTI_MODBUS, "data": res}
 
 
@@ -1158,6 +1244,16 @@ BUTTON_TYPES: Sequence["SolaxModbusButtonEntityDescription"] = [
         autorepeat="remotecontrol_autorepeat_duration",
     ),
     SolaxModbusButtonEntityDescription(
+        name="Remotecontrol Trigger Gen3 (mode 1-7)",
+        key="remotecontrol_trigger_gen3",
+        register=0x7C,
+        allowedtypes=AC | GEN3 | X1,
+        write_method=WRITE_MULTI_MODBUS,
+        icon="mdi:battery-clock",
+        value_function=autorepeat_function_remotecontrol_recompute_gen3,
+        autorepeat="remotecontrol_autorepeat_duration",
+    ),
+    SolaxModbusButtonEntityDescription(
         name="PowerControlMode Trigger (mode 8/9)",
         key="powercontrolmode8_trigger",
         register=0xA0,
@@ -1418,7 +1514,7 @@ NUMBER_TYPES: Sequence["SolaxModbusNumberEntityDescription"] = [
     SolaxModbusNumberEntityDescription(
         name="Remotecontrol Active Power (mode 1)",
         key="remotecontrol_active_power",
-        allowedtypes=AC | HYBRID | GEN4 | GEN5,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,
         native_min_value=-30000,
         native_max_value=30000,
         native_step=100,
@@ -1465,7 +1561,7 @@ NUMBER_TYPES: Sequence["SolaxModbusNumberEntityDescription"] = [
         name="Remotecontrol Autorepeat Duration (mode 1-9)",
         key="remotecontrol_autorepeat_duration",
         register_data_type=REGISTER_U16,
-        allowedtypes=AC | HYBRID | GEN4 | GEN5 | GEN6,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5 | GEN6,
         icon="mdi:home-clock",
         initvalue=0,  # seconds -
         native_min_value=0,
@@ -1479,7 +1575,7 @@ NUMBER_TYPES: Sequence["SolaxModbusNumberEntityDescription"] = [
     SolaxModbusNumberEntityDescription(
         name="Remotecontrol Import Limit (mode 1-9)",
         key="remotecontrol_import_limit",
-        allowedtypes=AC | HYBRID | GEN4 | GEN5 | GEN6,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5 | GEN6,
         native_min_value=0,
         native_max_value=30000,  # overwritten by MAX_EXPORT
         native_step=100,
@@ -1552,7 +1648,7 @@ NUMBER_TYPES: Sequence["SolaxModbusNumberEntityDescription"] = [
     SolaxModbusNumberEntityDescription(
         name="Remotecontrol Timeout (mode 1-9)",
         key="remotecontrol_timeout",
-        allowedtypes=AC | HYBRID | GEN4 | GEN5 | GEN6,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5 | GEN6,
         native_min_value=0,
         native_max_value=28800,
         native_step=1,
@@ -2508,7 +2604,7 @@ SELECT_TYPES: Sequence["SolaxModbusSelectEntityDescription"] = [
             # 2: "Enabled Quantity Control",
             # 3: "Enabled SOC Target Control",
         },
-        allowedtypes=AC | HYBRID | GEN4 | GEN5,
+        allowedtypes=AC | HYBRID | GEN3 | GEN4 | GEN5,
         initvalue=0,  # Disabled
         icon="mdi:transmission-tower",
     ),
