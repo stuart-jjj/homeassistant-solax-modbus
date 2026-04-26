@@ -4,11 +4,17 @@ import pytest
 
 from custom_components.solax_modbus.plugin_solax import (
     AC,
+    BUTTONREPEAT_FIRST,
+    BUTTONREPEAT_POST,
     EPS,
     GEN3,
     GEN4,
     HYBRID,
+    REGISTER_S32,
+    REGISTER_U16,
+    WRITE_MULTI_MODBUS,
     X3,
+    autorepeat_function_remotecontrol_recompute_gen3,
 )
 from custom_components.solax_modbus.plugin_solax import (
     plugin_instance as solax_plugin,
@@ -148,3 +154,59 @@ def test_parallel_master_scales_import_limit(mock_hub: Any) -> None:
     assert entity._attr_native_max_value == 45000, (
         f"Parallel Master with 45kW capacity should scale import limit to 45000W, got {entity._attr_native_max_value}W"
     )
+
+
+def test_remotecontrol_gen3_payload_shape_enabled() -> None:
+    datadict = {
+        "remotecontrol_power_control": "Enabled Power Control",
+        "remotecontrol_active_power": -1000,
+        "remotecontrol_reactive_power": 0,
+        "remotecontrol_duration": 20,
+        "remotecontrol_timeout": 0,
+        "remotecontrol_import_limit": 20000,
+        "export_control_user_limit": 20000,
+    }
+
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
+
+    assert payload["action"] == WRITE_MULTI_MODBUS
+    assert payload["data"] == [
+        (REGISTER_U16, 1),
+        (REGISTER_S32, -1000),
+        (REGISTER_S32, 0),
+    ]
+
+
+def test_remotecontrol_gen3_payload_shape_post_cleanup() -> None:
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_POST, None, {})
+
+    assert payload["action"] == WRITE_MULTI_MODBUS
+    assert payload["data"] == [
+        (REGISTER_U16, 0),
+        (REGISTER_S32, 0),
+        (REGISTER_S32, 0),
+    ]
+
+
+def test_remotecontrol_gen3_disabled_calls_autorepeat_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[dict[str, Any], str]] = []
+
+    def fake_autorepeat_stop(data: dict[str, Any], key: str) -> None:
+        calls.append((data, key))
+
+    monkeypatch.setattr("custom_components.solax_modbus.plugin_solax.autorepeat_stop", fake_autorepeat_stop)
+
+    datadict: dict[str, Any] = {
+        "remotecontrol_power_control": "Disabled",
+        "remotecontrol_active_power": 0,
+    }
+
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
+
+    assert payload["action"] == WRITE_MULTI_MODBUS
+    assert payload["data"] == [
+        (REGISTER_U16, 0),
+        (REGISTER_S32, 0),
+        (REGISTER_S32, 0),
+    ]
+    assert calls == [(datadict, "remotecontrol_trigger_gen3")]

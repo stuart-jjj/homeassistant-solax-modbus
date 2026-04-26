@@ -686,10 +686,10 @@ def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, d
                          negative = export/discharge, positive = import/charge
       0x7F–0x80   S32  – reactive power (always 0)
 
-    The inverter reverts to self-consumption if no refresh arrives within 4 s
-    (configured via register 0x9F = 4 at startup).  Set
-    *remotecontrol_autorepeat_duration* to the desired window (seconds) and
-    the integration will keep sending commands every poll cycle.
+    The inverter reverts to self-consumption if no refresh arrives within
+    4 s. Set *remotecontrol_autorepeat_duration* to the desired
+    window (seconds) and the integration will keep sending commands every
+    poll cycle while the remote-control override is active.
     """
     if initval == BUTTONREPEAT_POST:
         # Zero all five registers to relinquish control
@@ -718,6 +718,13 @@ def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, d
 
     if power_control == "Disabled":
         autorepeat_stop(datadict, "remotecontrol_trigger_gen3")
+        # Emit disable frame immediately. autorepeat_stop() sets _repeatUntil to 0,
+        # so no BUTTONREPEAT_POST cleanup frame will be sent by the scheduler.
+        res = [
+            (REGISTER_U16, 0),
+            (REGISTER_S32, 0),
+            (REGISTER_S32, 0),
+        ]
 
     _LOGGER.debug(f"Evaluated remotecontrol_trigger_gen3: power_control={power_control} ap_target={ap_target}W payload: {res}")
     return {"action": WRITE_MULTI_MODBUS, "data": res}
