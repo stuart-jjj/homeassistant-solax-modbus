@@ -2,17 +2,19 @@ from typing import Any
 
 import pytest
 
-from custom_components.solax_modbus.plugin_solax import (
-    AC,
+from custom_components.solax_modbus.const import (
     BUTTONREPEAT_FIRST,
     BUTTONREPEAT_POST,
+    REGISTER_S32,
+    REGISTER_U16,
+    WRITE_MULTI_MODBUS,
+)
+from custom_components.solax_modbus.plugin_solax import (
+    AC,
     EPS,
     GEN3,
     GEN4,
     HYBRID,
-    REGISTER_S32,
-    REGISTER_U16,
-    WRITE_MULTI_MODBUS,
     X3,
     autorepeat_function_remotecontrol_recompute_gen3,
 )
