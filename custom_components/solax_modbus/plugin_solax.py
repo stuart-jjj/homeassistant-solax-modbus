@@ -550,7 +550,7 @@ def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadi
         ("remotecontrol_set_type", params["set_type"]),
         ("remotecontrol_active_power", params["ap_target"]),
         ("remotecontrol_reactive_power", params["reactive_power"]),
-        ("remotecontrol_duration", datadict.get("remotecontrol_duration", 20)),
+        ("remotecontrol_duration", params["rc_duration"]),
         (REGISTER_U16, 0),  # dummy target soc
         (REGISTER_U32, 0),  # dummy target energy Wh
         (REGISTER_S32, 0),  # dummy target charge/discharge power
