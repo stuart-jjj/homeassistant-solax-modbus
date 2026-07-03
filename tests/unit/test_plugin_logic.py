@@ -212,3 +212,77 @@ def test_remotecontrol_gen3_disabled_calls_autorepeat_stop(monkeypatch: pytest.M
         (REGISTER_S32, 0),
     ]
     assert calls == [(datadict, "remotecontrol_trigger_gen3")]
+
+
+def test_remotecontrol_gen3_clamps_to_import_limit() -> None:
+    """Gen3 clamps to the configured hard import_limit, not a house_load-derived bound."""
+    datadict = {
+        "remotecontrol_power_control": "Enabled Power Control",
+        "remotecontrol_active_power": 5000,
+        "remotecontrol_import_limit": 2000,
+        "export_control_user_limit": 20000,
+        # house_load/pv_power/measured_power deliberately absent: Gen3 must not
+        # depend on them at all.
+    }
+
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
+
+    assert payload["data"] == [
+        (REGISTER_U16, 1),
+        (REGISTER_S32, 2000),
+        (REGISTER_S32, 0),
+    ]
+
+
+def test_remotecontrol_gen3_clamps_to_export_limit() -> None:
+    datadict = {
+        "remotecontrol_power_control": "Enabled Power Control",
+        "remotecontrol_active_power": -5000,
+        "remotecontrol_import_limit": 20000,
+        "export_control_user_limit": 2000,
+    }
+
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
+
+    assert payload["data"] == [
+        (REGISTER_U16, 1),
+        (REGISTER_S32, -2000),
+        (REGISTER_S32, 0),
+    ]
+
+
+def test_remotecontrol_gen3_ignores_other_modes() -> None:
+    """Only "Enabled Power Control" is meaningful for Gen3 — the mode-dispatch used
+    by the shared modes 1-7 path (Enabled Self Use, Enabled Grid Control, etc.) all
+    depend on house_load/PV assumptions that don't hold for a Gen3 retrofit battery
+    wired to its own sub-circuit, so Gen3 must not fall into them."""
+    datadict: dict[str, Any] = {
+        "remotecontrol_power_control": "Enabled Self Use",
+        "remotecontrol_active_power": -1000,
+        "remotecontrol_import_limit": 20000,
+        "export_control_user_limit": 20000,
+        "house_load": 500,  # if this were honoured, Enabled Self Use would target -500W
+        "_repeatUntil": {},
+    }
+
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
+
+    assert payload["data"] == [
+        (REGISTER_U16, 0),
+        (REGISTER_S32, 0),
+        (REGISTER_S32, 0),
+    ]
+
+
+def test_remotecontrol_gen3_parallel_slave_bails_out_silently() -> None:
+    datadict = {
+        "remotecontrol_power_control": "Enabled Power Control",
+        "remotecontrol_active_power": -1000,
+        "remotecontrol_import_limit": 20000,
+        "export_control_user_limit": 20000,
+        "parallel_setting": "Slave",
+    }
+
+    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
+
+    assert payload == {"action": WRITE_MULTI_MODBUS, "data": []}
