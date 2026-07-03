@@ -593,6 +593,36 @@ def autorepeat_function_remotecontrol_recompute(initval: int, descr: Any, datadi
     return {"action": WRITE_MULTI_MODBUS, "data": res}
 
 
+def _compute_gen3_active_power(datadict: dict[str, Any]) -> tuple[bool, int]:
+    """Clamp the requested Gen3 active-power target to the inverter's configured
+    hard import/export limits. Returns (enabled, ap_target_clamped).
+
+    Deliberately does *not* recompute the target from house_load/PV/phase-current
+    data the way the shared multi-mode `_compute_remotecontrol_ap_target` does
+    for modes 1-7. Gen3 X1 AC installations are commonly wired as a
+    secondary/retrofit battery on its own sub-circuit, where the inverter's own
+    grid/load/PV sensors do not represent the household's real power balance —
+    any "correction" derived from them is reacting to numbers unrelated to the
+    actual desired command. The caller (an external controller writing
+    remotecontrol_active_power) is expected to already provide a fully computed,
+    safety-checked setpoint; this only clamps it to the inverter's own
+    configured hard limits as a static last-resort safety floor — mirroring
+    se-vpp-client/vpp-local's inverter.py:_clamp_setpoint(), which clamps
+    against fixed configured values rather than a live sensor-derived bound.
+
+    Only "Enabled Power Control" is meaningful here — the mode-dispatch used by
+    modes 1-7 (Enabled Grid Control, Enabled Self Use, etc.) all depend on the
+    same house_load/PV assumption and are not supported for Gen3.
+    """
+    power_control = datadict.get("remotecontrol_power_control", "Disabled")
+    if power_control != "Enabled Power Control":
+        return False, 0
+    target = int(datadict.get("remotecontrol_active_power", 0))
+    import_limit = datadict.get("remotecontrol_import_limit", 20000)
+    export_limit = datadict.get("export_control_user_limit", 20000)
+    return True, int(max(-export_limit, min(import_limit, target)))
+
+
 def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, datadict: dict[str, Any]) -> dict[str, Any]:
     """Active power control for SolaX X1 AC G3 inverters.
 
@@ -602,10 +632,13 @@ def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, d
                          negative = export/discharge, positive = import/charge
       0x7F–0x80   S32  – reactive power (always 0)
 
-    The inverter reverts to self-consumption if no refresh arrives within
-    4 s. Set *remotecontrol_autorepeat_duration* to the desired
-    window (seconds) and the integration will keep sending commands every
-    poll cycle while the remote-control override is active.
+    The inverter reverts to self-consumption if no refresh arrives within 4 s
+    (register 0x9F "export duration" — left at its hardware default here; see
+    se-vpp-client/vpp-local/inverter.py, which deliberately leaves this at 4 s
+    rather than extending it, and instead refreshes the setpoint far more
+    often than the expiry window via a dedicated fast loop — see the
+    remotecontrol_trigger_gen3 button entity's keepalive timer in button.py,
+    which mirrors that design independent of the scan-group poll cadence).
     """
     if initval == BUTTONREPEAT_POST:
         # Zero all five registers to relinquish control
@@ -618,31 +651,31 @@ def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, d
             ],
         }
 
-    params = _compute_remotecontrol_ap_target(datadict)
-    power_control = params["power_control"]
-    ap_target = params["ap_target"]
-
-    # For Slave parallel mode, bail out silently
-    if power_control == "Disabled" and datadict.get("parallel_setting") == "Slave":
+    # For Slave parallel mode, bail out silently — orthogonal to the Gen3
+    # simplification above, this is a harness-level concern shared with the
+    # non-Gen3 remote-control path.
+    if datadict.get("parallel_setting") == "Slave":
         return {"action": WRITE_MULTI_MODBUS, "data": []}
 
-    res: list[tuple[Any, Any]] = [
-        (REGISTER_U16, 1),  # 0x7C: control enable
-        (REGISTER_S32, ap_target),  # 0x7D–0x7E: active power, LSW-first via order32=little
-        (REGISTER_S32, 0),  # 0x7F–0x80: reactive power (always 0 for Gen3)
-    ]
+    enabled, ap_target = _compute_gen3_active_power(datadict)
 
-    if power_control == "Disabled":
+    if not enabled:
         autorepeat_stop(datadict, "remotecontrol_trigger_gen3")
         # Emit disable frame immediately. autorepeat_stop() sets _repeatUntil to 0,
         # so no BUTTONREPEAT_POST cleanup frame will be sent by the scheduler.
-        res = [
+        res: list[tuple[Any, Any]] = [
             (REGISTER_U16, 0),
             (REGISTER_S32, 0),
             (REGISTER_S32, 0),
         ]
+    else:
+        res = [
+            (REGISTER_U16, 1),  # 0x7C: control enable
+            (REGISTER_S32, ap_target),  # 0x7D–0x7E: active power, LSW-first via order32=little
+            (REGISTER_S32, 0),  # 0x7F–0x80: reactive power (always 0 for Gen3)
+        ]
 
-    _LOGGER.debug(f"Evaluated remotecontrol_trigger_gen3: power_control={power_control} ap_target={ap_target}W payload: {res}")
+    _LOGGER.debug(f"Evaluated remotecontrol_trigger_gen3: enabled={enabled} ap_target={ap_target}W payload: {res}")
     return {"action": WRITE_MULTI_MODBUS, "data": res}
 
 
