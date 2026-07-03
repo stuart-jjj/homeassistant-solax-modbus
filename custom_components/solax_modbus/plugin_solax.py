@@ -480,9 +480,6 @@ def _compute_remotecontrol_ap_target(datadict: dict[str, Any]) -> dict[str, Any]
         power_control = "Disabled"
         ap_target = target
 
-    else:
-        ap_target = target
-
     # Debug logging: Target calculation
     _LOGGER.debug(f"[REMOTE_CONTROL] Target calculation: mode={power_control} ap_target={ap_target}W")
 
