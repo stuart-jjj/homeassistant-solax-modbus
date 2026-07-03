@@ -1412,7 +1412,19 @@ class SolaXModbusHub:
             ) in payload:
                 if key.startswith("_"):
                     typ = key
-                    value = int(value)
+                    try:
+                        value = int(value)
+                    except Exception as ex:
+                        # Abort the whole write rather than proceeding with a shorter,
+                        # misaligned regs_out: this payload is meant to land as one
+                        # atomic multi-register burst (e.g. the Gen3 remote-control
+                        # command), and writing fewer registers than intended shifts
+                        # every value after this one to the wrong offset on the wire.
+                        _LOGGER.error(
+                            f"{self._name}: could not cast '{value}' to int for register type {typ}; "
+                            f"aborting entire write payload:{payload} with exception {ex}"
+                        )
+                        return None
                 else:
                     descr = self.writeLocals[key]
                     # --- Begin safer reverse_option_dict mapping logic ---
@@ -1445,19 +1457,26 @@ class SolaXModbusHub:
                     typ = descr.register_data_type
                 try:
                     if typ == REGISTER_U16:
-                        regs_out += convert_to_registers(value, DataType.UINT16, self.plugin.order32)  # type: ignore[attr-defined]
+                        encoded = convert_to_registers(value, DataType.UINT16, self.plugin.order32)  # type: ignore[attr-defined]
                     elif typ == REGISTER_S16:
-                        regs_out += convert_to_registers(value, DataType.INT16, self.plugin.order32)  # type: ignore[attr-defined]
+                        encoded = convert_to_registers(value, DataType.INT16, self.plugin.order32)  # type: ignore[attr-defined]
                     elif typ == REGISTER_U32:
-                        regs_out += convert_to_registers(value, DataType.UINT32, self.plugin.order32)  # type: ignore[attr-defined]
+                        encoded = convert_to_registers(value, DataType.UINT32, self.plugin.order32)  # type: ignore[attr-defined]
                     elif typ == REGISTER_F32:
-                        regs_out += convert_to_registers(value, DataType.FLOAT32, self.plugin.order32)  # type: ignore[attr-defined]
+                        encoded = convert_to_registers(value, DataType.FLOAT32, self.plugin.order32)  # type: ignore[attr-defined]
                     elif typ == REGISTER_S32:
-                        regs_out += convert_to_registers(value, DataType.INT32, self.plugin.order32)  # type: ignore[attr-defined]
+                        encoded = convert_to_registers(value, DataType.INT32, self.plugin.order32)  # type: ignore[attr-defined]
                     else:
-                        _LOGGER.error(f"unsupported unit type: {typ} for {key}")
+                        _LOGGER.error(f"{self._name}: unsupported register type: {typ} for {key}; aborting entire write payload:{payload}")
+                        return None
                 except Exception as ex:
-                    _LOGGER.error(f"{self._name}: conversion for typ={typ} value={value} failed payload:{payload} with exception {ex}")
+                    # Abort the whole write rather than proceeding with a shorter,
+                    # misaligned regs_out (see the "_"-prefixed-key branch above for why).
+                    _LOGGER.error(
+                        f"{self._name}: conversion for typ={typ} value={value} failed; aborting entire write payload:{payload} with exception {ex}"
+                    )
+                    return None
+                regs_out += encoded
             online = await self.is_online()
             _LOGGER.debug(f"Ready to write multiple registers at 0x{address:02x}: {regs_out} online: {online} ")
             if online:
