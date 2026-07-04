@@ -28,11 +28,11 @@ How this was confirmed, in order:
    spontaneously stop and restart with nothing on our side changing; this was the strongest signal
    that the cause was external.
 4. A raw `pymodbus` wire-level trace (`pymodbus.logging` at debug) captured during an active
-   dropout showed a **second, independent Modbus session** — a completely separate, steadily
-   incrementing transaction-ID sequence (e.g. `0x5ad1, 0x5ad2, 0x5ad3...`, roughly every 3 seconds,
-   reading what look like energy-accumulator registers) with response frames appearing directly on
-   solax_modbus's own TCP socket with **no corresponding outbound request logged from our own
-   client**. This was direct proof of a second master's traffic on the wire.
+   dropout showed **unexpected Modbus/TCP responses** whose transaction IDs did not match any
+   requests logged by our own client (e.g. a steadily incrementing sequence like `0x5ad1, 0x5ad2,
+   0x5ad3...`, roughly every 3 seconds, reading what look like energy-accumulator registers).
+   This was strong evidence that some other software was concurrently talking Modbus to the
+   inverter (e.g. via a proxy/gateway multiplexing multiple clients), consistent with contention.
 5. Shutting down the jbox's `mbusd`/gateway containers stopped the dropouts immediately.
 
 During elimination, the following were ruled out as the cause (kept here so this isn't
