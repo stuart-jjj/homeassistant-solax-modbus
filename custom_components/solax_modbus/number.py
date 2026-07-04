@@ -21,6 +21,7 @@ from .const import (
     WRITE_MULTISINGLE_MODBUS,
     WRITE_SINGLE_MODBUS,
     BaseModbusNumberEntityDescription,
+    matches_modbus_protocol,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,7 +51,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             ) in number_info.read_scale_exceptions:
                 if hub.seriesnumber.startswith(prefix):
                     newdescr = replace(number_info, read_scale=value)
-        if plugin.matchInverterWithMask(hub._invertertype, newdescr.allowedtypes, hub.seriesnumber, newdescr.blacklist):
+        if plugin.matchInverterWithMask(hub._invertertype, newdescr.allowedtypes, hub.seriesnumber, newdescr.blacklist) and matches_modbus_protocol(
+            hub, newdescr
+        ):
             if not (newdescr.name.startswith(inverter_name_suffix)):
                 newdescr = replace(newdescr, name=inverter_name_suffix + newdescr.name)
 
@@ -138,12 +141,19 @@ class SolaXModbusNumber(NumberEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
+        if self._write_method == WRITE_DATA_LOCAL:
+            self.async_on_remove(self.hass.bus.async_listen("solax_modbus_local_data_loaded", self._handle_local_data_loaded))
+            self.async_write_ha_state()
+            return
+
         # Skip hub registration for computed/internal entities (those without modbus registers)
         if self.entity_description.register is None or self.entity_description.register < 0:
             return
         await self._hub.async_add_solax_modbus_sensor(self)
 
     async def async_will_remove_from_hass(self) -> None:
+        if self._write_method == WRITE_DATA_LOCAL or self.entity_description.register is None or self.entity_description.register < 0:
+            return
         await self._hub.async_remove_solax_modbus_sensor(self)
 
     """ remove duplicate declaration
@@ -154,6 +164,17 @@ class SolaXModbusNumber(NumberEntity):
     @callback
     def modbus_data_updated(self) -> None:
         self.async_write_ha_state()
+
+    @callback
+    def _handle_local_data_loaded(self, event: Any) -> None:
+        if (event.data or {}).get("hub_name") != self._hub._name:
+            return
+        self.async_write_ha_state()
+
+    @property
+    def should_poll(self) -> bool:
+        """Data is delivered by the hub."""
+        return False
 
     @property
     def name(self) -> str:
@@ -188,6 +209,8 @@ class SolaXModbusNumber(NumberEntity):
             if value is None:
                 return None
             if self._fmt == "i":
+                if float(self._attr_native_step) % 1:
+                    return float(value)
                 return int(value)
             return float(value)
         return None

@@ -20,6 +20,7 @@ from .const import (
     WRITE_SINGLE_MODBUS,
     BaseModbusSelectEntityDescription,
     autorepeat_set,
+    matches_modbus_protocol,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,7 +42,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     entities = []
     for select_info in plugin.SELECT_TYPES:
-        if plugin.matchInverterWithMask(hub._invertertype, select_info.allowedtypes, hub.seriesnumber, select_info.blacklist):
+        if plugin.matchInverterWithMask(
+            hub._invertertype, select_info.allowedtypes, hub.seriesnumber, select_info.blacklist
+        ) and matches_modbus_protocol(hub, select_info):
             select_info = replace(select_info, reverse_option_dict={v: k for k, v in select_info.option_dict.items()})
             if not (select_info.name.startswith(inverter_name_suffix)):
                 select_info = replace(select_info, name=inverter_name_suffix + select_info.name)
@@ -109,16 +112,29 @@ class SolaXModbusSelect(SelectEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
+        if self._write_method == WRITE_DATA_LOCAL:
+            self.async_on_remove(self.hass.bus.async_listen("solax_modbus_local_data_loaded", self._handle_local_data_loaded))
+            self.async_write_ha_state()
+            return
+
         # Skip hub registration for computed/internal entities (those without modbus registers)
         if self.entity_description.register is None or self.entity_description.register < 0:
             return
         await self._hub.async_add_solax_modbus_sensor(self)
 
     async def async_will_remove_from_hass(self) -> None:
+        if self._write_method == WRITE_DATA_LOCAL or self.entity_description.register is None or self.entity_description.register < 0:
+            return
         await self._hub.async_remove_solax_modbus_sensor(self)
 
     @callback
     def modbus_data_updated(self) -> None:
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_local_data_loaded(self, event: Any) -> None:
+        if (event.data or {}).get("hub_name") != self._hub._name:
+            return
         self.async_write_ha_state()
 
     @property

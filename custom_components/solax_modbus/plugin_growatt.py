@@ -41,6 +41,7 @@ from custom_components.solax_modbus.const import (  # type: ignore[attr-defined]
     BaseModbusNumberEntityDescription,
     BaseModbusSelectEntityDescription,
     BaseModbusSensorEntityDescription,
+    BaseModbusTimeEntityDescription,
     UnitOfReactivePower,
     plugin_base,
     value_function_rtc_ymd,
@@ -48,7 +49,7 @@ from custom_components.solax_modbus.const import (  # type: ignore[attr-defined]
     value_function_sync_rtc_ymd,
 )
 
-from .pymodbus_compat import DataType, convert_from_registers
+from .energy_dashboard import EnergyDashboardMapping, EnergyDashboardSensorMapping
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,6 +96,11 @@ ALL_MPPT_GROUP = MPPT3 | MPPT4 | MPPT6 | MPPT8 | MPPT10
 
 ALLDEFAULT = 0  # should be equivalent to HYBRID | AC | GEN | GEN2 | GEN3 | GEN4 | X1 | X3
 
+# SPF models known to expose only one PV input / MPPT even if the generic SPF block defines PV2 sensors.
+# Prefer real serial prefixes when available (e.g. KAM observed live on Simone's SPF5000ES units);
+# keep firmware-branch fallbacks for installations where only legacy family identifiers are exposed.
+SPF_SINGLE_MPPT_SERIAL_PREFIXES = ["YRE", "TTJ", "BNJ", "KAM", "067", "113", "500"]
+
 # ======================= end of bitmask handling code =============================================
 
 # ====================== find inverter type and details ===========================================
@@ -105,9 +111,12 @@ async def async_read_serialnr(hub: Any, address: int) -> str | None:
     try:
         inverter_data = await hub.async_read_holding_registers(unit=hub._modbus_addr, address=address, count=5)
         if inverter_data and not inverter_data.isError():
-            raw = convert_from_registers(inverter_data.registers[0:5], DataType.STRING, "big")  # type: ignore[attr-defined]  # Dynamic enum aliasing
-            res = raw.decode("ascii", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
-            hub.seriesnumber = res
+            raw_bytes = bytearray()
+            for register in inverter_data.registers[0:5]:
+                raw_bytes.extend(int(register).to_bytes(2, byteorder="big", signed=False))
+            res = raw_bytes.decode("ascii", errors="ignore").rstrip("\x00").strip() or None
+            if res:
+                hub.seriesnumber = res
     except Exception:
         _LOGGER.warning(f"{hub.name}: attempt to read firmware failed at 0x{address:x}", exc_info=True)
     if not res:
@@ -141,6 +150,11 @@ class GrowattModbusSensorEntityDescription(BaseModbusSensorEntityDescription):
     allowedtypes: int = ALLDEFAULT  # maybe 0x0000 (nothing) is a better default choice
     register_data_type: str = REGISTER_U16
     register_type: int = REG_HOLDING
+
+
+@dataclass(kw_only=True, frozen=True)
+class GrowattModbusTimeEntityDescription(BaseModbusTimeEntityDescription):
+    allowedtypes: int = ALLDEFAULT  # maybe 0x0000 (nothing) is a better default choice
 
 
 # ====================================== Computed value functions  =================================================
@@ -385,6 +399,18 @@ def value_function_combined_bms_current(initval: int, descr: Any, datadict: dict
     else:
         result = 0
     return result
+
+
+def value_function_spf_pv_power_total(initval: Any, descr: Any, datadict: dict[str, Any]) -> int | float:
+    return float(datadict.get("pv_power_1", 0) or 0) + float(datadict.get("pv_power_2", 0) or 0)
+
+
+def value_function_spf_today_s_solar_energy(initval: Any, descr: Any, datadict: dict[str, Any]) -> int | float:
+    return float(datadict.get("today_s_solar_energy_pv1", 0) or 0) + float(datadict.get("today_s_solar_energy_pv2", 0) or 0)
+
+
+def value_function_spf_total_solar_energy(initval: Any, descr: Any, datadict: dict[str, Any]) -> int | float:
+    return float(datadict.get("total_solar_energy_pv1", 0) or 0) + float(datadict.get("total_solar_energy_pv2", 0) or 0)
 
 
 def value_function_module_status(initval: int, descr: Any, datadict: dict[str, Any]) -> str:
@@ -1205,24 +1231,6 @@ SELECT_TYPES = [
     #  Battery First (4-6)
     ###
     GrowattModbusSelectEntityDescription(
-        name="Battery First Time 4 Begin",
-        key="battery_first_time_4_begin",
-        register=1017,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 4 End",
-        key="battery_first_time_4_end",
-        register=1018,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Battery First Time 4",
         key="battery_first_time_4",
         register=1019,
@@ -1235,24 +1243,6 @@ SELECT_TYPES = [
         icon="mdi:dip-switch",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Battery First Time 5 Begin",
-        key="battery_first_time_5_begin",
-        register=1020,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 5 End",
-        key="battery_first_time_5_end",
-        register=1021,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Battery First Time 5",
         key="battery_first_time_5",
         register=1022,
@@ -1263,24 +1253,6 @@ SELECT_TYPES = [
         allowedtypes=GEN3,
         entity_category=EntityCategory.CONFIG,
         icon="mdi:dip-switch",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 6 Begin",
-        key="battery_first_time_6_begin",
-        register=1023,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 6 End",
-        key="battery_first_time_6_end",
-        register=1024,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
     ),
     GrowattModbusSelectEntityDescription(
         name="Battery First Time 6",
@@ -1298,24 +1270,6 @@ SELECT_TYPES = [
     #  Grid First (4-6)
     ###
     GrowattModbusSelectEntityDescription(
-        name="Grid First Time 4 Begin",
-        key="grid_first_time_4_begin",
-        register=1026,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 4 End",
-        key="grid_first_time_4_end",
-        register=1027,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Grid First Time 4",
         key="grid_first_time_4",
         register=1028,
@@ -1328,24 +1282,6 @@ SELECT_TYPES = [
         icon="mdi:dip-switch",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Grid First Time 5 Begin",
-        key="grid_first_time_5_begin",
-        register=1029,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 5 End",
-        key="grid_first_time_5_end",
-        register=1030,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Grid First Time 5",
         key="grid_first_time_5",
         register=1031,
@@ -1356,24 +1292,6 @@ SELECT_TYPES = [
         allowedtypes=GEN3,
         entity_category=EntityCategory.CONFIG,
         icon="mdi:dip-switch",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 6 Begin",
-        key="grid_first_time_6_begin",
-        register=1032,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 6 End",
-        key="grid_first_time_6_end",
-        register=1033,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
     ),
     GrowattModbusSelectEntityDescription(
         name="Grid First Time 6",
@@ -1391,24 +1309,6 @@ SELECT_TYPES = [
     #  Grid First (1-3)
     ###
     GrowattModbusSelectEntityDescription(
-        name="Grid First Time 1 Begin",
-        key="grid_first_time_1_begin",
-        register=1080,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 1 End",
-        key="grid_first_time_1_end",
-        register=1081,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Grid First Time 1",
         key="grid_first_time_1",
         register=1082,
@@ -1421,24 +1321,6 @@ SELECT_TYPES = [
         icon="mdi:dip-switch",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Grid First Time 2 Begin",
-        key="grid_first_time_2_begin",
-        register=1083,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 2 End",
-        key="grid_first_time_2_end",
-        register=1084,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Grid First Time 2",
         key="grid_first_time_2",
         register=1085,
@@ -1449,24 +1331,6 @@ SELECT_TYPES = [
         allowedtypes=GEN3,
         entity_category=EntityCategory.CONFIG,
         icon="mdi:dip-switch",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 3 Begin",
-        key="grid_first_time_3_begin",
-        register=1086,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Grid First Time 3 End",
-        key="grid_first_time_3_end",
-        register=1087,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
     ),
     GrowattModbusSelectEntityDescription(
         name="Grid First Time 3",
@@ -1496,24 +1360,6 @@ SELECT_TYPES = [
         icon="mdi:dip-switch",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Battery First Time 1 Begin",
-        key="battery_first_time_1_begin",
-        register=1100,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 1 End",
-        key="battery_first_time_1_end",
-        register=1101,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Battery First Time 1",
         key="battery_first_time_1",
         register=1102,
@@ -1526,24 +1372,6 @@ SELECT_TYPES = [
         icon="mdi:dip-switch",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Battery First Time 2 Begin",
-        key="battery_first_time_2_begin",
-        register=1103,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 2 End",
-        key="battery_first_time_2_end",
-        register=1104,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Battery First Time 2",
         key="battery_first_time_2",
         register=1105,
@@ -1554,24 +1382,6 @@ SELECT_TYPES = [
         allowedtypes=GEN3,
         entity_category=EntityCategory.CONFIG,
         icon="mdi:dip-switch",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 3 Begin",
-        key="battery_first_time_3_begin",
-        register=1106,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Battery First Time 3 End",
-        key="battery_first_time_3_end",
-        register=1107,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
     ),
     GrowattModbusSelectEntityDescription(
         name="Battery First Time 3",
@@ -1589,24 +1399,6 @@ SELECT_TYPES = [
     #  Load First (1-3)
     ###
     GrowattModbusSelectEntityDescription(
-        name="Load First Time 1 Begin",
-        key="load_first_time_1_begin",
-        register=1110,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Load First Time 1 End",
-        key="load_first_time_1_end",
-        register=1111,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Load First Time 1",
         key="load_first_time_1",
         register=1112,
@@ -1619,24 +1411,6 @@ SELECT_TYPES = [
         icon="mdi:dip-switch",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Load First Time 2 Begin",
-        key="load_first_time_2_begin",
-        register=1113,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Load First Time 2 End",
-        key="load_first_time_2_end",
-        register=1114,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Load First Time 2",
         key="load_first_time_2",
         register=1115,
@@ -1647,24 +1421,6 @@ SELECT_TYPES = [
         allowedtypes=GEN3,
         entity_category=EntityCategory.CONFIG,
         icon="mdi:dip-switch",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Load First Time 3 Begin",
-        key="load_first_time_3_begin",
-        register=1116,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Load First Time 3 End",
-        key="load_first_time_3_end",
-        register=1117,
-        option_dict=TIME_OPTIONS_GEN4,
-        allowedtypes=GEN3,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:home-clock",
     ),
     GrowattModbusSelectEntityDescription(
         name="Load First Time 3",
@@ -1738,26 +1494,6 @@ SELECT_TYPES = [
         icon="mdi:power-plug-battery",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Time 1 Begin",
-        key="time_1_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 1 End",
-        key="time_1_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Time 1 Mode",
         key="time_1_mode",
         option_dict={
@@ -1783,28 +1519,6 @@ SELECT_TYPES = [
         icon="mdi:battery-clock",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Time 2 Begin",
-        key="time_2_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 2 End",
-        key="time_2_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Time 2 Mode",
         key="time_2_mode",
         option_dict={
@@ -1826,28 +1540,6 @@ SELECT_TYPES = [
             1: "Enabled",
         },
         write_method=WRITE_DATA_LOCAL,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 3 Begin",
-        key="time_3_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 3 End",
-        key="time_3_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
         allowedtypes=HYBRID | GEN4,
         entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
@@ -1881,28 +1573,6 @@ SELECT_TYPES = [
         icon="mdi:battery-clock",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Time 4 Begin",
-        key="time_4_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 4 End",
-        key="time_4_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Time 4 Mode",
         key="time_4_mode",
         option_dict={
@@ -1924,28 +1594,6 @@ SELECT_TYPES = [
             1: "Enabled",
         },
         write_method=WRITE_DATA_LOCAL,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 5 Begin",
-        key="time_5_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 5 End",
-        key="time_5_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
         allowedtypes=HYBRID | GEN4,
         entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
@@ -1979,28 +1627,6 @@ SELECT_TYPES = [
         icon="mdi:battery-clock",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Time 6 Begin",
-        key="time_6_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 6 End",
-        key="time_6_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Time 6 Mode",
         key="time_6_mode",
         option_dict={
@@ -2022,28 +1648,6 @@ SELECT_TYPES = [
             1: "Enabled",
         },
         write_method=WRITE_DATA_LOCAL,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 7 Begin",
-        key="time_7_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 7 End",
-        key="time_7_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
         allowedtypes=HYBRID | GEN4,
         entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
@@ -2077,28 +1681,6 @@ SELECT_TYPES = [
         icon="mdi:battery-clock",
     ),
     GrowattModbusSelectEntityDescription(
-        name="Time 8 Begin",
-        key="time_8_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 8 End",
-        key="time_8_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
         name="Time 8 Mode",
         key="time_8_mode",
         option_dict={
@@ -2120,28 +1702,6 @@ SELECT_TYPES = [
             1: "Enabled",
         },
         write_method=WRITE_DATA_LOCAL,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 9 Begin",
-        key="time_9_begin",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
-        allowedtypes=HYBRID | GEN4,
-        entity_category=EntityCategory.CONFIG,
-        entity_registry_enabled_default=False,
-        icon="mdi:battery-clock",
-    ),
-    GrowattModbusSelectEntityDescription(
-        name="Time 9 End",
-        key="time_9_end",
-        option_dict=TIME_OPTIONS_GEN4,
-        write_method=WRITE_DATA_LOCAL,
-        register_data_type=REGISTER_U16,
         allowedtypes=HYBRID | GEN4,
         entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
@@ -3100,9 +2660,9 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         key="grid_status",
         name="Grid Status",
         allowedtypes=GEN4,
-        value_function=lambda initval, descr, datadict: "Off (Výpadek - z baterie)"
-        if (datadict.get("register_3000", 0) & 0xFF) == 2
-        else "On (connected to net)",
+        value_function=lambda initval, descr, datadict: (
+            "Off (Výpadek - z baterie)" if (datadict.get("register_3000", 0) & 0xFF) == 2 else "On (connected to net)"
+        ),
         icon="mdi:transmission-tower",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -4677,6 +4237,7 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         key="battery_soc",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
         register=1014,
         register_type=REG_INPUT,
         allowedtypes=GEN3,
@@ -6315,6 +5876,7 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         key="battery_soc",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
         register=3171,
         register_type=REG_INPUT,
         allowedtypes=GEN4 | HYBRID,
@@ -8989,6 +8551,7 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         scale=0.1,
         rounding=1,
         allowedtypes=SPF,
+        blacklist=SPF_SINGLE_MPPT_SERIAL_PREFIXES,
     ),
     GrowattModbusSensorEntityDescription(
         name="PV Power 1",
@@ -9016,6 +8579,18 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         scale=0.1,
         rounding=1,
         allowedtypes=SPF,
+        blacklist=SPF_SINGLE_MPPT_SERIAL_PREFIXES,
+        icon="mdi:solar-power-variant",
+    ),
+    GrowattModbusSensorEntityDescription(
+        name="PV Power Total",
+        key="pv_power_total",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        register=-1,
+        value_function=value_function_spf_pv_power_total,
+        allowedtypes=SPF,
         icon="mdi:solar-power-variant",
     ),
     GrowattModbusSensorEntityDescription(
@@ -9040,6 +8615,7 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         scale=0.1,
         rounding=1,
         allowedtypes=SPF,
+        blacklist=SPF_SINGLE_MPPT_SERIAL_PREFIXES,
         icon="mdi:current-dc",
     ),
     GrowattModbusSensorEntityDescription(
@@ -9110,6 +8686,7 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         key="battery_soc",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
         register=18,
         register_type=REG_INPUT,
         allowedtypes=SPF,
@@ -9338,6 +8915,7 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         scale=0.1,
         rounding=2,
         allowedtypes=SPF,
+        blacklist=SPF_SINGLE_MPPT_SERIAL_PREFIXES,
     ),
     GrowattModbusSensorEntityDescription(
         name="Total Solar Energy PV2",
@@ -9350,6 +8928,31 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
         register_type=REG_INPUT,
         register_data_type=REGISTER_S32,
         scale=0.1,
+        rounding=2,
+        allowedtypes=SPF,
+        blacklist=SPF_SINGLE_MPPT_SERIAL_PREFIXES,
+    ),
+    GrowattModbusSensorEntityDescription(
+        name="Today's Solar Energy",
+        key="today_s_solar_energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        icon="mdi:solar-power",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        register=-1,
+        value_function=value_function_spf_today_s_solar_energy,
+        rounding=2,
+        allowedtypes=SPF,
+    ),
+    GrowattModbusSensorEntityDescription(
+        name="Total Solar Energy",
+        key="total_solar_energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        icon="mdi:solar-power",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        register=-1,
+        value_function=value_function_spf_total_solar_energy,
         rounding=2,
         allowedtypes=SPF,
     ),
@@ -9543,6 +9146,482 @@ SENSOR_TYPES: list[GrowattModbusSensorEntityDescription] = [
     ),
 ]
 
+
+TIME_TYPES = [
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 4 Begin",
+        key="battery_first_time_4_begin",
+        register=1017,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 4 End",
+        key="battery_first_time_4_end",
+        register=1018,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 5 Begin",
+        key="battery_first_time_5_begin",
+        register=1020,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 5 End",
+        key="battery_first_time_5_end",
+        register=1021,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 6 Begin",
+        key="battery_first_time_6_begin",
+        register=1023,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 6 End",
+        key="battery_first_time_6_end",
+        register=1024,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 4 Begin",
+        key="grid_first_time_4_begin",
+        register=1026,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 4 End",
+        key="grid_first_time_4_end",
+        register=1027,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 5 Begin",
+        key="grid_first_time_5_begin",
+        register=1029,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 5 End",
+        key="grid_first_time_5_end",
+        register=1030,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 6 Begin",
+        key="grid_first_time_6_begin",
+        register=1032,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 6 End",
+        key="grid_first_time_6_end",
+        register=1033,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 1 Begin",
+        key="grid_first_time_1_begin",
+        register=1080,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 1 End",
+        key="grid_first_time_1_end",
+        register=1081,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 2 Begin",
+        key="grid_first_time_2_begin",
+        register=1083,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 2 End",
+        key="grid_first_time_2_end",
+        register=1084,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 3 Begin",
+        key="grid_first_time_3_begin",
+        register=1086,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Grid First Time 3 End",
+        key="grid_first_time_3_end",
+        register=1087,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 1 Begin",
+        key="battery_first_time_1_begin",
+        register=1100,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 1 End",
+        key="battery_first_time_1_end",
+        register=1101,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 2 Begin",
+        key="battery_first_time_2_begin",
+        register=1103,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 2 End",
+        key="battery_first_time_2_end",
+        register=1104,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 3 Begin",
+        key="battery_first_time_3_begin",
+        register=1106,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Battery First Time 3 End",
+        key="battery_first_time_3_end",
+        register=1107,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Load First Time 1 Begin",
+        key="load_first_time_1_begin",
+        register=1110,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Load First Time 1 End",
+        key="load_first_time_1_end",
+        register=1111,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Load First Time 2 Begin",
+        key="load_first_time_2_begin",
+        register=1113,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Load First Time 2 End",
+        key="load_first_time_2_end",
+        register=1114,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Load First Time 3 Begin",
+        key="load_first_time_3_begin",
+        register=1116,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Load First Time 3 End",
+        key="load_first_time_3_end",
+        register=1117,
+        option_dict=TIME_OPTIONS_GEN4,
+        allowedtypes=GEN3,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:home-clock",
+    ),
+    ###
+    #
+    # WRITE_DATA_LOCAL
+    #
+    ###
+    GrowattModbusTimeEntityDescription(
+        name="Time 1 Begin",
+        key="time_1_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 1 End",
+        key="time_1_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 2 Begin",
+        key="time_2_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 2 End",
+        key="time_2_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 3 Begin",
+        key="time_3_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 3 End",
+        key="time_3_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 4 Begin",
+        key="time_4_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 4 End",
+        key="time_4_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 5 Begin",
+        key="time_5_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 5 End",
+        key="time_5_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 6 Begin",
+        key="time_6_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 6 End",
+        key="time_6_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 7 Begin",
+        key="time_7_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 7 End",
+        key="time_7_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 8 Begin",
+        key="time_8_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 8 End",
+        key="time_8_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 9 Begin",
+        key="time_9_begin",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+    GrowattModbusTimeEntityDescription(
+        name="Time 9 End",
+        key="time_9_end",
+        option_dict=TIME_OPTIONS_GEN4,
+        write_method=WRITE_DATA_LOCAL,
+        register_data_type=REGISTER_U16,
+        allowedtypes=HYBRID | GEN4,
+        entity_category=EntityCategory.CONFIG,
+        entity_registry_enabled_default=False,
+        icon="mdi:battery-clock",
+    ),
+]
+
+
 # ============================ plugin declaration =================================================
 
 
@@ -9585,13 +9664,25 @@ class growatt_plugin(plugin_base):
             invertertype = HYBRID | GEN4 | X1 | MPPT4  # MIN TL-XH-US Hybrid, 4 MPPT
         elif seriesnumber.startswith("JGQ"):
             invertertype = HYBRID | GEN4 | X1  # MIN 7600 TL-XH-US Hybrid, 3 MPPT
+        elif seriesnumber.startswith("HJU"):
+            invertertype = HYBRID | GEN4 | X1  # MIN 4200TL-XH2 Hybrid, 2 MPPT
 
         # MOD type:GEN4
         # elif seriesnumber.startswith('???'):  invertertype = HYBRID | GEN4 | X1         # MOD 3000 TL3-XH Hybrid, 2 MPPT
         elif seriesnumber.startswith("XHL"):
             invertertype = HYBRID | GEN4 | X1  # MOD 4000 TL3-XH Hybrid, 2 MPPT
+        elif seriesnumber.startswith("DPS"):
+            invertertype = HYBRID | GEN4 | X3  # MOD 5000 TL3-HU Hybrid, 2 MPPT
+        elif seriesnumber.startswith("DKS"):
+            invertertype = HYBRID | GEN4 | X3 | MPPT3  # MOD 10000 TL3-HU Hybrid, 3 MPPT
+        elif seriesnumber.startswith("DO1"):
+            invertertype = HYBRID | GEN4 | X3 | MPPT3  # MOD 12000 TL3-HU Hybrid, 3 MPPT
+        elif seriesnumber.startswith("TSS"):
+            invertertype = HYBRID | GEN4 | X3 | MPPT3  # Hybrid KTL3-HU 12kW
         elif seriesnumber.startswith("PYL"):
             invertertype = HYBRID | GEN4 | X3  # MOD 5000 TL3-XH Hybrid, 2 MPPT
+        elif seriesnumber.startswith("JCM"):
+            invertertype = HYBRID | GEN4 | X3  # MOD 6000 TL3-XH Hybrid, 2 MPPT
         # elif seriesnumber.startswith('???'):  invertertype = HYBRID | GEN4 | X1         # MOD 6000 TL3-XH Hybrid, 2 MPPT
         elif seriesnumber.startswith("MEK"):
             invertertype = HYBRID | GEN4 | X3  # MOD 7000 TL3-XH Hybrid, 2 MPPT
@@ -9631,6 +9722,10 @@ class growatt_plugin(plugin_base):
         elif seriesnumber.startswith("NFR"):
             invertertype = HYBRID | SPF | X1  # SPE 8000 ES, 2 MPPT
 
+        # SPA type:GEN3 (AC-coupled)
+        elif seriesnumber.startswith("RH1"):
+            invertertype = AC | GEN3 | X1  # SPA 3000TL BL AC, no PV MPPT
+
         # SPF type:SPF
         elif seriesnumber.startswith("YRE"):
             invertertype = HYBRID | SPF | X1  # SPF 5000 ES, 1 MPPT
@@ -9638,6 +9733,8 @@ class growatt_plugin(plugin_base):
             invertertype = HYBRID | SPF | X1  # SPF 5000 ES, 1 MPPT
         elif seriesnumber.startswith("BNJ"):
             invertertype = HYBRID | SPF | X1  # SPF 3000 TL LVM 24P, 1 MPPT
+        elif seriesnumber.startswith("KAM"):
+            invertertype = HYBRID | SPF | X1  # SPF 5000 ES observed live, 1 MPPT
         elif seriesnumber.startswith("NUK"):
             invertertype = HYBRID | SPF | X1  # SPF 12000T DVM-US MPV, 2 MPPT
 
@@ -9648,6 +9745,8 @@ class growatt_plugin(plugin_base):
             invertertype = HYBRID | GEN4 | X3  # WIT 12000-HU, 2 MPPT
         elif seriesnumber.startswith("0PH"):
             invertertype = HYBRID | GEN4 | X3 | MPPT10  # WIT 100000-HU, 10 MPPT
+        elif seriesnumber.startswith("0HU"):
+            invertertype = HYBRID | GEN4 | X3  # WIT 15K-HU, 2 MPPT
 
         # PV only
 
@@ -9744,6 +9843,8 @@ class growatt_plugin(plugin_base):
                 invertertype = PV | GEN4 | X1  # PV TL-X 2.5kW - 6kW (MIN)
             elif seriesnumber.startswith("GH1"):
                 invertertype = PV | GEN4 | X1  # PV TL-X 2.5kW - 6kW (MIN)
+            elif seriesnumber.startswith("AK1"):
+                invertertype = PV | GEN4 | X1  # MIN 3600TL-X2, 2 MPPT #2027
             elif seriesnumber.startswith("AM1"):
                 invertertype = PV | GEN4 | X1 | MPPT3  # PV TL-X2 7kW - 120kW (MIN)
             # elif seriesnumber.startswith('MID'):  invertertype = PV | GEN4 | X3 | MPPT3 # PV X3 2MPPT 15-25kW, 3/4 MPPT 25-40kW & 30-50kW
@@ -9763,9 +9864,9 @@ class growatt_plugin(plugin_base):
                 invertertype = HYBRID | GEN4 | X3  # Hybrid TL3-XH (BP) 3kW - 10kW (MOD), 11kW - 30kW (MID)
             elif seriesnumber.startswith("V"):
                 invertertype = HYBRID | GEN4 | X3  # Hybrid TL3-XH 3kW - 10kW (MOD)
-            # Include additional SPF5000ES firmware branches for auto-detection (e.g. 113).
+            # Include additional SPF5000ES firmware branches only as fallback when the real serial prefix is unavailable.
             elif seriesnumber.startswith(("067", "113", "500")):
-                invertertype = HYBRID | SPF | X1  # Hybrid SPF 5kW
+                invertertype = HYBRID | SPF | X1  # Hybrid SPF 5kW / SPF5000ES branch, treated as 1 MPPT
             else:
                 invertertype = 0
                 _LOGGER.error(f"unrecognized {hub.name} inverter type - firmware version : {seriesnumber}")
@@ -9802,6 +9903,86 @@ class growatt_plugin(plugin_base):
         return (genmatch and xmatch and hybmatch and epsmatch and dcbmatch and mpptmatch) and not blacklisted
 
 
+ENERGY_DASHBOARD_MAPPING = EnergyDashboardMapping(
+    plugin_name="growatt",
+    mappings=[
+        EnergyDashboardSensorMapping(
+            source_key="ac_input_power",
+            target_key="grid_power",
+            name="Grid Power",
+            icon="mdi:transmission-tower-import",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="pv_power_total",
+            target_key="solar_power",
+            name="Solar Power",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="battery_power_charge",
+            target_key="battery_power",
+            name="Battery Power",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="ac_discharge_power",
+            target_key="home_consumption_power",
+            name="Home Consumption Power",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="ac_charge_power",
+            target_key="grid_to_battery_power",
+            name="Grid to Battery Power",
+            icon="mdi:transmission-tower-export",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="ac_input_power",
+            target_key="grid_energy_import",
+            name="Grid Import Energy",
+            use_riemann_sum=True,
+            filter_function=lambda v: max(0, v),
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="today_s_solar_energy",
+            target_key="solar_energy_production",
+            name="Solar Production Energy",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="today_s_ac_discharge",
+            target_key="home_consumption_energy",
+            name="Home Consumption Energy",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="battery_power_charge",
+            target_key="battery_energy_charge",
+            name="Battery Charge Energy",
+            use_riemann_sum=True,
+            filter_function=lambda v: abs(min(0, v)),
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="today_s_battery_discharge",
+            target_key="battery_energy_discharge",
+            name="Battery Discharge Energy",
+            allowedtypes=SPF,
+        ),
+        EnergyDashboardSensorMapping(
+            source_key="today_s_ac_charge",
+            target_key="grid_to_battery_energy",
+            name="Grid to Battery Energy",
+            icon="mdi:transmission-tower-export",
+            allowedtypes=SPF,
+        ),
+    ],
+)
+
+
 plugin_instance = growatt_plugin(
     plugin_name="Growatt",
     plugin_manufacturer="Growatt New Energy",
@@ -9810,7 +9991,8 @@ plugin_instance = growatt_plugin(
     BUTTON_TYPES=BUTTON_TYPES,
     SELECT_TYPES=SELECT_TYPES,
     SWITCH_TYPES=[],
-    TIME_TYPES=[],
+    TIME_TYPES=TIME_TYPES,
+    ENERGY_DASHBOARD_MAPPING=ENERGY_DASHBOARD_MAPPING,
     block_size=100,
     # order16 = "big",
     order32="big",
