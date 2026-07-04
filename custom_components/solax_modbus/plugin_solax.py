@@ -702,8 +702,6 @@ def _compute_gen3_active_power(datadict: dict[str, Any]) -> tuple[bool, int]:
     import_limit = datadict.get("remotecontrol_import_limit", 20000)
     export_limit = datadict.get("export_control_user_limit", 20000)
     return True, int(max(-export_limit, min(import_limit, target)))
-
-
 def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, datadict: dict[str, Any]) -> dict[str, Any]:
     """Active power control for SolaX X1 AC G3 inverters.
 
@@ -714,12 +712,9 @@ def autorepeat_function_remotecontrol_recompute_gen3(initval: int, descr: Any, d
       0x7F–0x80   S32  – reactive power (always 0)
 
     The inverter reverts to self-consumption if no refresh arrives within 4 s
-    (register 0x9F "export duration" — left at its hardware default here; see
-    se-vpp-client/vpp-local/inverter.py, which deliberately leaves this at 4 s
-    rather than extending it, and instead refreshes the setpoint far more
-    often than the expiry window via a dedicated fast loop — see the
-    remotecontrol_trigger_gen3 button entity's keepalive timer in button.py,
-    which mirrors that design independent of the scan-group poll cadence).
+    (register 0x9F "export duration", left at its hardware default here), so
+    the integration keeps refreshing the setpoint while the remote-control
+    override is active rather than extending that hardware timeout.
     """
     if initval == BUTTONREPEAT_POST:
         # Zero all five registers to relinquish control

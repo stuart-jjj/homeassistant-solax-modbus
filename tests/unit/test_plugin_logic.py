@@ -212,8 +212,6 @@ def test_remotecontrol_gen3_disabled_calls_autorepeat_stop(monkeypatch: pytest.M
         (REGISTER_S32, 0),
     ]
     assert calls == [(datadict, "remotecontrol_trigger_gen3")]
-
-
 def test_remotecontrol_gen3_clamps_to_import_limit() -> None:
     """Gen3 clamps to the configured hard import_limit, not a house_load-derived bound."""
     datadict = {
@@ -282,7 +280,5 @@ def test_remotecontrol_gen3_parallel_slave_bails_out_silently() -> None:
         "export_control_user_limit": 20000,
         "parallel_setting": "Slave",
     }
-
     payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
-
     assert payload == {"action": WRITE_MULTI_MODBUS, "data": []}
