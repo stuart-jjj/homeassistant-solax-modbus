@@ -1,4 +1,4 @@
-# Brief: Gen3 remote-control power drops — review request
+# Gen3 remote-control power drops — investigation notes (resolved)
 
 ## Resolution (2026-07-04)
 
