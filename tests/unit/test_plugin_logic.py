@@ -281,6 +281,4 @@ def test_remotecontrol_gen3_parallel_slave_bails_out_silently() -> None:
         "parallel_setting": "Slave",
     }
     payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
-    payload = autorepeat_function_remotecontrol_recompute_gen3(BUTTONREPEAT_FIRST, None, datadict)
-    assert payload == {"action": WRITE_MULTI_MODBUS, "data": []}
     assert payload == {"action": WRITE_MULTI_MODBUS, "data": []}
