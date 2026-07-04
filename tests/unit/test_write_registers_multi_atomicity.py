@@ -8,7 +8,7 @@ middle shifts everything after them to the wrong address on the wire.
 """
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -45,7 +45,7 @@ async def test_write_registers_multi_writes_when_all_tuples_encode_cleanly() -> 
     hub = _FakeHub()
 
     resp = await SolaXModbusHub.async_write_registers_multi(
-        hub,
+        cast(SolaXModbusHub, hub),
         unit=1,
         address=0x7C,
         payload=[
@@ -67,7 +67,7 @@ async def test_write_registers_multi_aborts_on_cast_failure_instead_of_truncatin
     hub = _FakeHub()
 
     resp = await SolaXModbusHub.async_write_registers_multi(
-        hub,
+        cast(SolaXModbusHub, hub),
         unit=1,
         address=0x7C,
         payload=[
@@ -86,7 +86,7 @@ async def test_write_registers_multi_aborts_on_encoding_failure_instead_of_trunc
     hub = _FakeHub()
 
     resp = await SolaXModbusHub.async_write_registers_multi(
-        hub,
+        cast(SolaXModbusHub, hub),
         unit=1,
         address=0x7C,
         payload=[

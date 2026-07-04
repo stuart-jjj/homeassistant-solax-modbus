@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 from time import time
@@ -112,7 +113,7 @@ class SolaXModbusButton(ButtonEntity):
         self._command = button_info.command
         self._attr_icon = button_info.icon
         self._write_method = button_info.write_method
-        self._gen3_keepalive_unsub = None
+        self._gen3_keepalive_unsub: Callable[[], None] | None = None
 
     @property
     def name(self) -> str:
