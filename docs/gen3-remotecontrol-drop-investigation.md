@@ -84,7 +84,7 @@ separate custom component that drives this inverter's RC mode every 10s to
 track an EMHASS optimiser target) has intermittently seen the Solax battery
 power drop to ~0 W and recover on its own, at an interval that **looks like
 roughly once a minute but has not been rigorously timed** — treat "~60s" as a
-weak, unconfirmed observation, not a established period. It could plausibly
+weak, unconfirmed observation, not an established period. It could plausibly
 just be an artifact of how often a given sensor's displayed state refreshes
 rather than a real fixed period in the underlying behavior.
 
